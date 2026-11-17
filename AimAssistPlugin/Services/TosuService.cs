@@ -21,6 +21,10 @@ public class TosuService
 
 	private static readonly SemaphoreSlim _startLock = new SemaphoreSlim(1, 1);
 
+	private static readonly string[] GameProcessNames = new string[2] { "osu!", "osulazer" };
+
+	private static volatile bool _isLazer = false;
+
 	private static bool _osuRunning = false;
 
 	private static bool _tosuRunning = false;
@@ -48,6 +52,8 @@ public class TosuService
 			_isRunning = value;
 		}
 	}
+
+	public static bool IsLazer => _isLazer;
 
 	public static dynamic? LatestResponse
 	{
@@ -90,7 +96,7 @@ public class TosuService
 				await Task.Delay(1000, ct);
 				continue;
 			}
-			Process process = Process.GetProcessesByName("osu!").FirstOrDefault();
+			Process process = GameProcessNames.SelectMany((string name) => Process.GetProcessesByName(name)).FirstOrDefault();
 			Process process2 = Process.GetProcessesByName("tosu").FirstOrDefault();
 			_osuRunning = process != null;
 			_tosuRunning = process2 != null;
@@ -123,7 +129,13 @@ public class TosuService
 					Task<string> task1 = HttpClient.GetStringAsync("http://localhost:24050/json/v2", ct);
 					Task<string> task2 = HttpClient.GetStringAsync("http://localhost:24050/json/v2/precise", ct);
 					await Task.WhenAll(new Task<string>[2] { task1, task2 });
-					LatestResponse = JsonConvert.DeserializeObject(task1.Result);
+					dynamic? response = JsonConvert.DeserializeObject(task1.Result);
+					string? client = (string?)response?.client;
+					if (client != null)
+					{
+						_isLazer = string.Equals(client, "lazer", StringComparison.OrdinalIgnoreCase);
+					}
+					LatestResponse = response;
 					LatestPreciseResponse = JsonConvert.DeserializeObject(task2.Result);
 				}
 				catch

@@ -40,7 +40,7 @@ internal class HitObjectManager
 	{
 		if (TosuService.LatestResponse != null)
 		{
-			return (int)MapDifficultyRange(TosuService.LatestResponse.beatmap.stats.ar.converted, 180.0, 1200.0, 450.0, adjustToMods: false);
+			return (int)MapDifficultyRange((double)TosuService.LatestResponse.beatmap.stats.ar.converted, 180.0, 1200.0, 450.0, adjustToMods: false);
 		}
 		return 0;
 	}
@@ -124,7 +124,7 @@ internal class HitObjectManager
 		{
 			return new List<HitObject>();
 		}
-		HashSet<string> hashSet = ParseMods(TosuService.LatestResponse.play.mods.name);
+		HashSet<string> hashSet = ParseMods((string)TosuService.LatestResponse.play.mods.name);
 		List<HitObject> list = BeatmapDecoder.Decode(path3).HitObjects;
 		if (hashSet.Contains("HR"))
 		{
