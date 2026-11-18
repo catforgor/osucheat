@@ -2,6 +2,7 @@
   <PropertyGroup>
     <AssemblyName>AimAssistPlugin</AssemblyName>
     <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
     <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
   <PropertyGroup>
