@@ -8,6 +8,7 @@ just for fun
 
 # How to use
 
-1. build and drag zip into your opentabletdriver's plugin manager
-2. enable plugin, set power in the range 0-1
-3. profit
+1. download and open tosu
+2. build and drag zip into your opentabletdriver's plugin manager
+3. enable plugin, set power in the range 0-1
+4. profit
