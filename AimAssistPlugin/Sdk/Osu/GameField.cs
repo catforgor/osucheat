@@ -63,17 +63,6 @@ internal class GameField
 		return GetLayout().Ratio;
 	}
 
-	private static Vector2 GetOffset()
-	{
-		return GetLayout().Offset;
-	}
-
-	public static Vector2 DisplayToField(Vector2 display)
-	{
-		var (ratio, offset) = GetLayout();
-		return (display - offset) / ratio;
-	}
-
 	public static Vector2 FieldToDisplay(Vector2 field)
 	{
 		var (ratio, offset) = GetLayout();

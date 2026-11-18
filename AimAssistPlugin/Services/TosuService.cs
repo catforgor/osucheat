@@ -1,230 +1,399 @@
 using System;
-using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using OpenTabletDriver.Plugin;
 
 namespace AimAssistPlugin.Services;
 
-public class TosuService
+public sealed record TosuSnapshot(
+	string? State,
+	string? Client,
+	int? LiveTime,
+	double? Ar,
+	double? Cs,
+	string Mods,
+	string? SongsFolder,
+	string? BeatmapFile);
+
+public static class TosuService
 {
-	private static readonly HttpClient HttpClient = new HttpClient();
+	private const string LogGroup = "Reconstructor";
+	private const string StateUrl = "http://localhost:24050/json/v2";
+	private const string PreciseUrl = "http://localhost:24050/json/v2/precise";
+	private const string ReleaseUrl = "https://api.github.com/repos/tosuapp/tosu/releases/latest";
 
-	private static readonly TimeSpan UpdateInterval = TimeSpan.FromMilliseconds(1.0);
+	// tosu = 15ms
+	private static readonly TimeSpan UpdateInterval = TimeSpan.FromMilliseconds(8);
+	private static readonly TimeSpan MonitorInterval = TimeSpan.FromSeconds(2);
+	private static readonly TimeSpan StartRetryBackoff = TimeSpan.FromSeconds(60);
 
-	private static readonly SemaphoreSlim _startLock = new SemaphoreSlim(1, 1);
+	private const int FailureLimit = 5;
 
-	private static readonly string[] GameProcessNames = new string[2] { "osu!", "osulazer" };
+	private const int NoTime = int.MinValue;
 
-	private static volatile bool _isLazer = false;
+	private static readonly HttpClient PollClient = new() { Timeout = TimeSpan.FromSeconds(2) };
+	private static readonly HttpClient DownloadClient = new() { Timeout = TimeSpan.FromMinutes(5) };
 
-	private static bool _osuRunning = false;
+	private static readonly SemaphoreSlim StartLock = new(1, 1);
+	private static readonly object LifecycleLock = new();
+	private static readonly string[] GameProcessNames = { "osu!", "osulazer" };
 
-	private static bool _tosuRunning = false;
+	private static volatile bool _isLazer;
+	private static volatile bool _osuRunning;
+	private static volatile bool _tosuRunning;
+	private static volatile bool _isInitializing;
+	private static volatile bool _isRunning;
 
-	private static bool _isRunning = false;
+	private static TosuSnapshot? _snapshot;
+	private static int _preciseTime = NoTime;
 
-	private static bool _isInitializing = false;
+	private static CancellationTokenSource? _cts;
+	private static Process? _ownedTosu;
+	private static DateTime _retryStartAfter = DateTime.MinValue;
+	private static string? _lastMonitorError;
 
-	private static dynamic? _latestResponse = null;
-
-	private static dynamic? _latestPreciseResponse = null;
-
-	private static CancellationTokenSource _cts = new CancellationTokenSource();
-
-	private static Task? _updateTask;
-
-	public static bool IsRunning
-	{
-		get
-		{
-			return _isRunning;
-		}
-		private set
-		{
-			_isRunning = value;
-		}
-	}
+	public static bool IsRunning => _isRunning;
 
 	public static bool IsLazer => _isLazer;
 
-	public static dynamic? LatestResponse
+	public static TosuSnapshot? Snapshot => Volatile.Read(ref _snapshot);
+
+	public static int? PreciseTime
 	{
 		get
 		{
-			return _latestResponse;
-		}
-		private set
-		{
-			_latestResponse = value;
+			int time = Volatile.Read(ref _preciseTime);
+			return time == NoTime ? null : time;
 		}
 	}
 
-	public static dynamic? LatestPreciseResponse
+	public static void EnsureStarted()
 	{
-		get
+		if (_isRunning)
 		{
-			return _latestPreciseResponse;
+			return;
 		}
-		private set
+		lock (LifecycleLock)
 		{
-			_latestPreciseResponse = value;
+			if (_isRunning)
+			{
+				return;
+			}
+			_cts?.Cancel();
+			_cts?.Dispose();
+			_cts = new CancellationTokenSource();
+			CancellationToken token = _cts.Token;
+			_ = Task.Run(() => MonitorProcessesAsync(token));
+			_ = Task.Run(() => UpdateTosuDataAsync(token));
+			_isRunning = true;
 		}
-	}
-
-	public static void Start()
-	{
-		_cts = new CancellationTokenSource();
-		Task.Run(() => MonitorProcessesAsync(_cts.Token));
-		_updateTask = Task.Run(() => UpdateTosuDataAsync(_cts.Token));
-		IsRunning = true;
 	}
 
 	private static async Task MonitorProcessesAsync(CancellationToken ct)
 	{
 		while (!ct.IsCancellationRequested)
 		{
-			if (_isInitializing)
+			try
 			{
-				await Task.Delay(1000, ct);
-				continue;
+				if (!_isInitializing)
+				{
+					_osuRunning = IsAnyRunning(GameProcessNames);
+					_tosuRunning = IsAnyRunning("tosu");
+					if (_osuRunning && !_tosuRunning)
+					{
+						if (DateTime.UtcNow >= _retryStartAfter)
+						{
+							await StartTosuAsync();
+						}
+					}
+					else if (!_osuRunning && _tosuRunning)
+					{
+						StopOwnedTosu();
+					}
+				}
+				_lastMonitorError = null;
+				await Task.Delay(MonitorInterval, ct);
 			}
-			Process process = GameProcessNames.SelectMany((string name) => Process.GetProcessesByName(name)).FirstOrDefault();
-			Process process2 = Process.GetProcessesByName("tosu").FirstOrDefault();
-			_osuRunning = process != null;
-			_tosuRunning = process2 != null;
-			if (_osuRunning && !_tosuRunning)
+			catch (OperationCanceledException) when (ct.IsCancellationRequested)
 			{
-				await StartTosuAsync();
+				break;
 			}
-			else if (!_osuRunning && _tosuRunning)
+			catch (Exception ex)
 			{
+				LogOnce(ex);
 				try
 				{
-					process2?.Kill();
+					await Task.Delay(MonitorInterval, ct);
 				}
-				catch
+				catch (OperationCanceledException)
 				{
+					break;
 				}
 			}
-			await Task.Delay(2000, ct);
+		}
+	}
+
+	private static void LogOnce(Exception ex)
+	{
+		if (_lastMonitorError == ex.Message)
+		{
+			return;
+		}
+		_lastMonitorError = ex.Message;
+		Log.Write(LogGroup, "tosu monitor error: " + ex.Message, LogLevel.Error);
+	}
+
+	private static bool IsAnyRunning(params string[] names)
+	{
+		foreach (string name in names)
+		{
+			Process[] processes = Process.GetProcessesByName(name);
+			try
+			{
+				if (processes.Length > 0)
+				{
+					return true;
+				}
+			}
+			finally
+			{
+				foreach (Process process in processes)
+				{
+					process.Dispose();
+				}
+			}
+		}
+		return false;
+	}
+
+	private static void StopOwnedTosu()
+	{
+		Process? owned = Interlocked.Exchange(ref _ownedTosu, null);
+		if (owned == null)
+		{
+			return;
+		}
+		try
+		{
+			if (!owned.HasExited)
+			{
+				owned.Kill();
+			}
+		}
+		catch (Exception ex) when (ex is InvalidOperationException or Win32Exception) { }
+		finally
+		{
+			owned.Dispose();
 		}
 	}
 
 	private static async Task UpdateTosuDataAsync(CancellationToken ct)
 	{
+		int failures = 0;
 		while (!ct.IsCancellationRequested)
 		{
-			if (_osuRunning && _tosuRunning)
+			try
 			{
-				try
+				if (_osuRunning && _tosuRunning)
 				{
-					Task<string> task1 = HttpClient.GetStringAsync("http://localhost:24050/json/v2", ct);
-					Task<string> task2 = HttpClient.GetStringAsync("http://localhost:24050/json/v2/precise", ct);
-					await Task.WhenAll(new Task<string>[2] { task1, task2 });
-					dynamic? response = JsonConvert.DeserializeObject(task1.Result);
-					string? client = (string?)response?.client;
-					if (client != null)
+					try
 					{
-						_isLazer = string.Equals(client, "lazer", StringComparison.OrdinalIgnoreCase);
+						Task<string> stateTask = PollClient.GetStringAsync(StateUrl, ct);
+						Task<string> preciseTask = PollClient.GetStringAsync(PreciseUrl, ct);
+						await Task.WhenAll(stateTask, preciseTask);
+
+						TosuSnapshot snapshot = ParseSnapshot(JObject.Parse(await stateTask));
+						int? preciseTime = (int?)JObject.Parse(await preciseTask).SelectToken("currentTime");
+
+						if (snapshot.Client != null)
+						{
+							_isLazer = string.Equals(snapshot.Client, "lazer", StringComparison.OrdinalIgnoreCase);
+						}
+						Volatile.Write(ref _snapshot, snapshot);
+						Volatile.Write(ref _preciseTime, preciseTime ?? NoTime);
+						failures = 0;
 					}
-					LatestResponse = response;
-					LatestPreciseResponse = JsonConvert.DeserializeObject(task2.Result);
+					catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or FormatException or InvalidCastException)
+					{
+						if (ct.IsCancellationRequested)
+						{
+							break;
+						}
+						if (++failures >= FailureLimit)
+						{
+							ClearData();
+						}
+					}
 				}
-				catch
+				else
 				{
-					LatestResponse = null;
-					LatestPreciseResponse = null;
+					failures = 0;
+					ClearData();
 				}
+				await Task.Delay(UpdateInterval, ct);
 			}
-			await Task.Delay(UpdateInterval, ct);
+			catch (OperationCanceledException) when (ct.IsCancellationRequested)
+			{
+				break;
+			}
 		}
+	}
+
+	private static void ClearData()
+	{
+		Volatile.Write(ref _snapshot, null);
+		Volatile.Write(ref _preciseTime, NoTime);
+	}
+
+	private static TosuSnapshot ParseSnapshot(JObject root)
+	{
+		return new TosuSnapshot(
+			State: (string?)root.SelectToken("state.name"),
+			Client: (string?)root.SelectToken("client"),
+			LiveTime: (int?)root.SelectToken("beatmap.time.live"),
+			Ar: (double?)root.SelectToken("beatmap.stats.ar.converted"),
+			Cs: (double?)root.SelectToken("beatmap.stats.cs.original"),
+			Mods: (string?)root.SelectToken("play.mods.name") ?? string.Empty,
+			SongsFolder: (string?)root.SelectToken("folders.songs"),
+			BeatmapFile: (string?)root.SelectToken("directPath.beatmapFile"));
+	}
+
+	private static string ResolvePluginFolder()
+	{
+		string userData = Path.Combine(AppContext.BaseDirectory, "userdata");
+		return Directory.Exists(userData)
+			? Path.Combine(userData, "Plugins", "Reconstructor")
+			: Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OpenTabletDriver", "Plugins", "Reconstructor");
 	}
 
 	private static async Task StartTosuAsync()
 	{
-		if (!(await _startLock.WaitAsync(0)))
+		if (!await StartLock.WaitAsync(0))
 		{
 			return;
 		}
 		_isInitializing = true;
-		string text = Path.Combine(AppContext.BaseDirectory, "userdata");
-		string pluginFolder = (Directory.Exists(text) ? Path.Combine(text, "Plugins", "Reconstructor") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OpenTabletDriver", "Plugins", "Reconstructor"));
-		if (!Directory.Exists(pluginFolder))
-		{
-			return;
-		}
-		string tosuPath = Path.Combine(pluginFolder, "tosu.exe");
-		string tosuConfigPath = Path.Combine(pluginFolder, "tosu.env");
-		if (!File.Exists(tosuPath))
-		{
-			await DownloadLatestTosuAsync(tosuPath);
-		}
-		if (!File.Exists(tosuConfigPath))
-		{
-			await File.WriteAllTextAsync(tosuConfigPath, "DEBUG_LOG=false\r\nENABLE_AUTOUPDATE=false\r\nOPEN_DASHBOARD_ON_STARTUP=false\r\n\r\nSHOW_MP_COMMANDS=false\r\nCALCULATE_PP=false\r\n\r\nENABLE_KEY_OVERLAY=false\r\nENABLE_INGAME_OVERLAY=false\r\n\r\nPOLL_RATE=15\r\nPRECISE_DATA_POLL_RATE=15\r\n\r\nINGAME_OVERLAY_KEYBIND=Control + Shift + Space\r\nINGAME_OVERLAY_MAX_FPS=60\r\n\r\nSERVER_IP=127.0.0.1\r\nSERVER_PORT=24050\r\nALLOWED_IPS=127.0.0.1,localhost,absolute\r\n\r\nSTATIC_FOLDER_PATH=./static");
-		}
 		try
 		{
-			Process.Start(new ProcessStartInfo
+			string pluginFolder = ResolvePluginFolder();
+			if (!Directory.Exists(pluginFolder))
 			{
-				FileName = tosuPath,
-				WorkingDirectory = pluginFolder
-			});
-			await Task.Delay(500);
+				Log.Write(LogGroup, "Plugin folder not found: " + pluginFolder, LogLevel.Warning);
+				_retryStartAfter = DateTime.UtcNow + StartRetryBackoff;
+				return;
+			}
+
+			string tosuPath = Path.Combine(pluginFolder, "tosu.exe");
+			string tosuConfigPath = Path.Combine(pluginFolder, "tosu.env");
+			if (!File.Exists(tosuPath))
+			{
+				await DownloadLatestTosuAsync(tosuPath);
+			}
+			if (!File.Exists(tosuPath))
+			{
+				_retryStartAfter = DateTime.UtcNow + StartRetryBackoff;
+				return;
+			}
+			if (!File.Exists(tosuConfigPath))
+			{
+				await File.WriteAllTextAsync(tosuConfigPath, "DEBUG_LOG=false\r\nENABLE_AUTOUPDATE=false\r\nOPEN_DASHBOARD_ON_STARTUP=false\r\n\r\nSHOW_MP_COMMANDS=false\r\nCALCULATE_PP=false\r\n\r\nENABLE_KEY_OVERLAY=false\r\nENABLE_INGAME_OVERLAY=false\r\n\r\nPOLL_RATE=15\r\nPRECISE_DATA_POLL_RATE=15\r\n\r\nINGAME_OVERLAY_KEYBIND=Control + Shift + Space\r\nINGAME_OVERLAY_MAX_FPS=60\r\n\r\nSERVER_IP=127.0.0.1\r\nSERVER_PORT=24050\r\nALLOWED_IPS=127.0.0.1,localhost,absolute\r\n\r\nSTATIC_FOLDER_PATH=./static");
+			}
+
+			try
+			{
+				Process? started = Process.Start(new ProcessStartInfo
+				{
+					FileName = tosuPath,
+					WorkingDirectory = pluginFolder
+				});
+				Process? previous = Interlocked.Exchange(ref _ownedTosu, started);
+				previous?.Dispose();
+				await Task.Delay(500);
+			}
+			catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+			{
+				Log.Write(LogGroup, "Failed to start tosu: " + ex.Message, LogLevel.Error);
+				_retryStartAfter = DateTime.UtcNow + StartRetryBackoff;
+			}
 		}
 		finally
 		{
-			_startLock.Release();
 			_isInitializing = false;
+			StartLock.Release();
 		}
 	}
 
 	private static async Task DownloadLatestTosuAsync(string tosuPath)
 	{
-		_ = 3;
+		string tempZip = Path.Combine(Path.GetTempPath(), "tosu_" + Path.GetRandomFileName() + ".zip");
 		try
 		{
-			using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/tosuapp/tosu/releases/latest");
+			using HttpRequestMessage request = new(HttpMethod.Get, ReleaseUrl);
 			request.Headers.UserAgent.Add(new ProductInfoHeaderValue("TosuAutoUpdater", "1.0"));
-			using HttpResponseMessage response = await HttpClient.SendAsync(request);
+			using HttpResponseMessage response = await DownloadClient.SendAsync(request);
 			response.EnsureSuccessStatusCode();
-			JToken val = JObject.Parse(await response.Content.ReadAsStringAsync())["assets"];
-			JToken obj = ((val is JArray) ? val : null);
-			JToken val2 = ((obj != null) ? ((IEnumerable<JToken>)obj).FirstOrDefault((JToken a) =>
+
+			JObject release = JObject.Parse(await response.Content.ReadAsStringAsync());
+			JToken? asset = (release["assets"] as JArray)?.FirstOrDefault(a =>
 			{
-				JToken val3 = a[(object)"name"];
-				return val3 != null && ((object)val3).ToString().Contains("windows", StringComparison.OrdinalIgnoreCase) && (((object)a[(object)"name"])?.ToString().EndsWith(".zip") ?? false);
-			}) : null);
-			if (val2 == null)
+				string? name = (string?)a["name"];
+				return name != null
+					&& name.Contains("windows", StringComparison.OrdinalIgnoreCase)
+					&& name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+			});
+			if (asset == null)
 			{
+				Log.Write(LogGroup, "Nothing usable found in tosu release", LogLevel.Warning);
 				return;
 			}
-			string requestUri = ((object)val2[(object)"browser_download_url"])?.ToString() ?? string.Empty;
-			string tempZip = Path.Combine(Path.GetTempPath(), "tosu_latest.zip");
-			await File.WriteAllBytesAsync(tempZip, await HttpClient.GetByteArrayAsync(requestUri));
-			using (ZipArchive zipArchive = ZipFile.OpenRead(tempZip))
+
+			string? downloadUrl = (string?)asset["browser_download_url"];
+			string? digest = (string?)asset["digest"];
+			if (string.IsNullOrEmpty(downloadUrl) || digest == null || !digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
 			{
-				foreach (ZipArchiveEntry entry in zipArchive.Entries)
-				{
-					if (entry.Name.Equals("tosu.exe", StringComparison.OrdinalIgnoreCase))
-					{
-						entry.ExtractToFile(tosuPath, overwrite: true);
-						break;
-					}
-				}
+				Log.Write(LogGroup, "tosu release has digest", LogLevel.Warning);
+				return;
 			}
-			File.Delete(tempZip);
+
+			byte[] bytes = await DownloadClient.GetByteArrayAsync(downloadUrl);
+			string actual = Convert.ToHexString(SHA256.HashData(bytes));
+			if (!string.Equals(actual, digest["sha256:".Length..], StringComparison.OrdinalIgnoreCase))
+			{
+				Log.Write(LogGroup, "tosu digest invalid", LogLevel.Error);
+				return;
+			}
+
+			await File.WriteAllBytesAsync(tempZip, bytes);
+			using ZipArchive archive = ZipFile.OpenRead(tempZip);
+			ZipArchiveEntry? entry = archive.Entries.FirstOrDefault(e => e.Name.Equals("tosu.exe", StringComparison.OrdinalIgnoreCase));
+			if (entry == null)
+			{
+				Log.Write(LogGroup, "Nothing usable found in tosu release", LogLevel.Warning);
+				return;
+			}
+			entry.ExtractToFile(tosuPath, overwrite: true);
 		}
-		catch (Exception)
+		catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or IOException or InvalidDataException or UnauthorizedAccessException)
 		{
+			Log.Write(LogGroup, "tosu download failed: " + ex.Message, LogLevel.Error);
+		}
+		finally
+		{
+			try
+			{
+				File.Delete(tempZip);
+			}
+			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
 		}
 	}
 }

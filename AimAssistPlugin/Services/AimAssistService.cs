@@ -8,7 +8,7 @@ using OsuParsers.Beatmaps.Objects;
 
 namespace AimAssistPlugin.Services;
 
-public class AimAssistService
+public static class AimAssistService
 {
 	private readonly struct AimFrameCache(float scaledRadius, float fovRadius, Vector2 targetPosition)
 	{
@@ -19,9 +19,9 @@ public class AimAssistService
 		public readonly Vector2 TargetPosition = targetPosition;
 	}
 
-	public static float Power = 0f;
+	private const long InitRetryIntervalMs = 500;
 
-	private static readonly Vector2 monitorOffsets = GameField.CalculateScreenOffset();
+	public static volatile float Power = 0f;
 
 	private static int preEmpt;
 
@@ -31,9 +31,31 @@ public class AimAssistService
 
 	private static int currentIndex;
 
+	private static long nextInitAttemptMs;
+
 	private static HitObject? currentHitObject;
 
 	private static HitObject? previousHitObject;
+
+	public static bool EnsureInitialized()
+	{
+		if (HitObjectManager.GetHitObjectsCount() > 0)
+		{
+			return true;
+		}
+		long now = Environment.TickCount64;
+		if (now < nextInitAttemptMs)
+		{
+			return false;
+		}
+		Initialize();
+		if (HitObjectManager.GetHitObjectsCount() == 0)
+		{
+			nextInitAttemptMs = now + InitRetryIntervalMs;
+			return false;
+		}
+		return true;
+	}
 
 	public static void Initialize()
 	{
@@ -42,8 +64,8 @@ public class AimAssistService
 		hitObjectRadius = HitObjectManager.GetHitObjectRadius();
 		lastAudioTime = -1;
 		currentIndex = 0;
-		currentHitObject = HitObjectManager.GetHitObject(0);
-		previousHitObject = HitObjectManager.GetHitObject(1);
+		currentHitObject = HitObjectManager.GetHitObjectsCount() > 0 ? HitObjectManager.GetHitObject(0) : null;
+		previousHitObject = null;
 		InputManager.SetAccumulatedOffset(Vector2.Zero);
 		InputManager.SetLastCursorPosition(Vector2.Zero);
 	}
@@ -56,70 +78,72 @@ public class AimAssistService
 		previousHitObject = null;
 	}
 
-	private static Vector2 ApplyAimAssist(Vector2 cursorPosition)
+	private static Vector2 ApplyAimAssist(HitObject target, Vector2 cursorPosition, int time)
 	{
-		int time = AudioEngine.GetTime();
+		Vector2 offset = InputManager.GetAccumulatedOffset();
 		if (Power <= 0f)
 		{
-			return InputManager.GetAccumulatedOffset();
+			return offset;
 		}
+
 		float ratio = GameField.GetRatio();
-		float num = hitObjectRadius * ratio;
-		float num2 = Power * 16f * ratio;
-		float num3 = ((Power <= 1f) ? (Power * 0.7f) : ((Power - 1f) * 0.15f + 0.7f));
-		float fovRadius = Math.Max(1.2f, 4f * num3) * num;
-		HitObject hitObject = currentHitObject;
-		AimFrameCache aimFrameCache = new AimFrameCache(num, fovRadius, hitObject.Position);
-		Vector2 vector = InputManager.GetAccumulatedOffset();
-		Vector2 vector2 = cursorPosition + vector;
-		Vector2 vector3 = aimFrameCache.TargetPosition - vector2;
-		float num4 = Vector2.DistanceSquared(vector2, aimFrameCache.TargetPosition);
-		float num5 = ((num4 <= aimFrameCache.ScaledRadiusSquared) ? 0.65f : 1f);
+		float scaledRadius = hitObjectRadius * ratio;
+		float maxOffset = Power * 16f * ratio;
+		float strength = Power <= 1f ? Power * 0.7f : (Power - 1f) * 0.15f + 0.7f;
+		float fovRadius = Math.Max(1.2f, 4f * strength) * scaledRadius;
+
+		AimFrameCache frame = new(scaledRadius, fovRadius, target.Position);
+		Vector2 assistedCursor = cursorPosition + offset;
+		Vector2 toTarget = frame.TargetPosition - assistedCursor;
+		float distanceSquared = Vector2.DistanceSquared(assistedCursor, frame.TargetPosition);
+		float insideFactor = distanceSquared <= frame.ScaledRadiusSquared ? 0.65f : 1f;
 		Vector2 displacement = InputManager.GetLastCursorPosition() - cursorPosition;
-		if (hitObject is Spinner)
+
+		if (target is Spinner)
 		{
-			InputManager.SetAccumulatedOffset(vector);
-			return vector;
+			InputManager.SetAccumulatedOffset(offset);
+			return offset;
 		}
-		bool flag = Vector2.DistanceSquared(cursorPosition, aimFrameCache.TargetPosition) <= aimFrameCache.FovSquared;
-		bool flag2 = time > hitObject.StartTime - preEmpt;
-		if (flag & flag2)
+
+		bool insideFov = Vector2.DistanceSquared(cursorPosition, frame.TargetPosition) <= frame.FovSquared;
+		bool approachStarted = time > target.StartTime - preEmpt;
+		if (insideFov & approachStarted)
 		{
-			if (hitObject is Slider slider)
+			if (target is Slider slider)
 			{
-				float num6 = num * 0.35f;
-				float num7 = num6 * num6;
-				if (num4 <= num7)
+				float sliderCoreRadius = scaledRadius * 0.35f;
+				if (distanceSquared <= sliderCoreRadius * sliderCoreRadius)
 				{
-					float num8 = vector3.Length();
-					if (num8 > float.Epsilon)
+					float distance = toTarget.Length();
+					if (distance > float.Epsilon)
 					{
-						num3 *= Math.Min(num8 / num6, 1f);
+						strength *= Math.Min(distance / sliderCoreRadius, 1f);
 					}
 				}
 				if (time > slider.StartTime)
 				{
-					num3 *= Power / 2.5f;
+					strength *= Power / 2.5f;
 				}
 			}
-			float num9 = vector3.LengthSquared();
-			float num10 = displacement.LengthSquared();
-			if (num9 > float.Epsilon && num10 > float.Epsilon)
+
+			float toTargetSquared = toTarget.LengthSquared();
+			float displacementSquared = displacement.LengthSquared();
+			if (toTargetSquared > float.Epsilon && displacementSquared > float.Epsilon)
 			{
-				float num11 = MathF.Sqrt(num9);
-				float val = MathF.Sqrt(num10);
-				float num12 = Math.Min(num11, val);
-				Vector2 vector4 = vector3 / num11 * (num5 * num3 * num12);
-				vector += vector4;
-				vector = new Vector2(Math.Clamp(vector.X, 0f - num2, num2), Math.Clamp(vector.Y, 0f - num2, num2));
+				float distance = MathF.Sqrt(toTargetSquared);
+				float moved = MathF.Sqrt(displacementSquared);
+				float step = Math.Min(distance, moved);
+				offset += toTarget / distance * (insideFactor * strength * step);
+				offset = new Vector2(Math.Clamp(offset.X, -maxOffset, maxOffset), Math.Clamp(offset.Y, -maxOffset, maxOffset));
 			}
 		}
 		else
 		{
-			vector = InputManager.Resync(displacement, vector, 0.6f * num3);
+			offset = InputManager.Resync(displacement, offset, 0.6f * strength);
 		}
-		InputManager.SetAccumulatedOffset(vector);
-		return vector;
+
+		InputManager.SetAccumulatedOffset(offset);
+		return offset;
 	}
 
 	public static Vector2 GetOffset(Vector2 cursorPosition)
@@ -130,47 +154,51 @@ public class AimAssistService
 			Initialize();
 		}
 		lastAudioTime = time;
-		if (currentHitObject != null && time > currentHitObject.EndTime)
+
+		HitObject? current = currentHitObject;
+		if (current == null)
 		{
-			int num = currentIndex + 1;
-			if (num >= HitObjectManager.GetHitObjectsCount())
-			{
-				Vector2 accumulatedOffset = InputManager.GetAccumulatedOffset();
-				Vector2 vector = InputManager.Resync(InputManager.GetLastCursorPosition() - cursorPosition, accumulatedOffset, 0.5f);
-				InputManager.SetAccumulatedOffset(vector);
-				InputManager.SetLastCursorPosition(cursorPosition);
-				return vector;
-			}
-			currentIndex = num;
-			currentHitObject = HitObjectManager.GetHitObject(currentIndex);
-			previousHitObject = HitObjectManager.GetHitObject(currentIndex - 1);
-			currentHitObject.Position = GameField.FieldToDisplay(currentHitObject.Position) + monitorOffsets;
-			previousHitObject.Position = GameField.FieldToDisplay(previousHitObject.Position) + monitorOffsets;
+			InputManager.SetLastCursorPosition(cursorPosition);
+			return InputManager.GetAccumulatedOffset();
 		}
-		Vector2 accumulatedOffset2 = InputManager.GetAccumulatedOffset();
+
+		if (time > current.EndTime)
+		{
+			int nextIndex = currentIndex + 1;
+			if (nextIndex >= HitObjectManager.GetHitObjectsCount())
+			{
+				Vector2 resynced = InputManager.Resync(InputManager.GetLastCursorPosition() - cursorPosition, InputManager.GetAccumulatedOffset(), 0.5f);
+				InputManager.SetAccumulatedOffset(resynced);
+				InputManager.SetLastCursorPosition(cursorPosition);
+				return resynced;
+			}
+			currentIndex = nextIndex;
+			previousHitObject = current;
+			current = HitObjectManager.GetHitObject(currentIndex);
+			currentHitObject = current;
+			current.Position = GameField.FieldToDisplay(current.Position) + GameField.CalculateScreenOffset();
+		}
+
+		Vector2 accumulatedOffset = InputManager.GetAccumulatedOffset();
 		if (currentIndex == 0)
 		{
 			InputManager.SetLastCursorPosition(cursorPosition);
-			return accumulatedOffset2;
+			return accumulatedOffset;
 		}
-		if (((previousHitObject != null) ? (currentHitObject.StartTime - previousHitObject.EndTime) : int.MaxValue) > preEmpt * 2)
+
+		int gap = previousHitObject != null ? current.StartTime - previousHitObject.EndTime : int.MaxValue;
+		if (gap > preEmpt * 2)
 		{
 			InputManager.SetLastCursorPosition(cursorPosition);
-			return accumulatedOffset2;
+			return accumulatedOffset;
 		}
-		Vector2 result;
-		if (currentHitObject is HitCircle)
+
+		Vector2 result = current switch
 		{
-			result = ApplyAimAssist(cursorPosition);
-		}
-		else if (currentHitObject is Slider slider)
-		{
-			result = ((time < slider.StartTime) ? ApplyAimAssist(cursorPosition) : accumulatedOffset2);
-		}
-		else
-		{
-			result = accumulatedOffset2;
-		}
+			HitCircle => ApplyAimAssist(current, cursorPosition, time),
+			Slider slider when time < slider.StartTime => ApplyAimAssist(current, cursorPosition, time),
+			_ => accumulatedOffset,
+		};
 		InputManager.SetLastCursorPosition(cursorPosition);
 		return result;
 	}

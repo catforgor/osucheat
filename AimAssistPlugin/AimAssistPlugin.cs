@@ -13,7 +13,11 @@ namespace AimAssistPlugin;
 [PluginName("Reconstructor")]
 public class AimAssistPlugin : IPositionedPipelineElement<IDeviceReport>, IPipelineElement<IDeviceReport>
 {
-	private readonly object _syncLock = new object();
+	private const long ErrorLogIntervalMs = 1000;
+
+	private static readonly object _syncLock = new object();
+
+	private long _lastErrorLogMs = long.MinValue;
 
 	public PipelinePosition Position => (PipelinePosition)2;
 
@@ -28,7 +32,7 @@ public class AimAssistPlugin : IPositionedPipelineElement<IDeviceReport>, IPipel
 		}
 		set
 		{
-			AimAssistService.Power = value;
+			AimAssistService.Power = float.IsNaN(value) ? 0f : Math.Max(0f, value);
 		}
 	}
 
@@ -36,7 +40,7 @@ public class AimAssistPlugin : IPositionedPipelineElement<IDeviceReport>, IPipel
 
 	private static float RoundOff(float val)
 	{
-		return (float)Math.Floor(val + 0.5f * (float)Math.Sign(val));
+		return MathF.Round(val, MidpointRounding.AwayFromZero);
 	}
 
 	private static Vector2 RoundVec(Vector2 v)
@@ -46,53 +50,65 @@ public class AimAssistPlugin : IPositionedPipelineElement<IDeviceReport>, IPipel
 
 	public void Consume(IDeviceReport report)
 	{
-		ITabletReport val = (ITabletReport)(object)((report is ITabletReport) ? report : null);
-		if (val == null)
+		if (report is not ITabletReport tabletReport)
 		{
 			Emit?.Invoke(report);
 			return;
 		}
-		if (!TosuService.IsRunning)
+
+		TosuService.EnsureStarted();
+
+		lock (_syncLock)
 		{
-			TosuService.Start();
-		}
-		if (Player.IsPlaying)
-		{
-			if (HitObjectManager.hitObjects.Count == 0)
+			try
 			{
-				AimAssistService.Initialize();
-			}
-			lock (_syncLock)
-			{
-				try
+				if (Player.IsPlaying)
 				{
-					Vector2 offset = AimAssistService.GetOffset(((IAbsolutePositionReport)val).Position);
-					Vector2 v = ((IAbsolutePositionReport)val).Position + offset;
-					((IAbsolutePositionReport)val).Position = RoundVec(v);
-					return;
+					ProcessPlayingReport(tabletReport);
 				}
-				catch (Exception ex)
+				else
 				{
-					Log.Write("Aim Assist", "Error: " + ex.Message, (LogLevel)3, false, false);
-					return;
-				}
-				finally
-				{
-					Emit?.Invoke((IDeviceReport)(object)val);
+					ProcessIdleReport(tabletReport);
 				}
 			}
+			catch (Exception ex) when (ex is not OutOfMemoryException)
+			{
+				LogThrottled(ex);
+			}
 		}
+
+		Emit?.Invoke(tabletReport);
+	}
+
+	private static void ProcessPlayingReport(ITabletReport report)
+	{
+		AimAssistService.EnsureInitialized();
+		Vector2 offset = AimAssistService.GetOffset(report.Position);
+		report.Position = RoundVec(report.Position + offset);
+	}
+
+	private static void ProcessIdleReport(ITabletReport report)
+	{
 		HitObjectManager.hitObjects.Clear();
 		Vector2 lastCursorPosition = InputManager.GetLastCursorPosition();
 		Vector2 accumulatedOffset = InputManager.GetAccumulatedOffset();
 		AimAssistService.Reset();
-		Vector2 position = ((IAbsolutePositionReport)val).Position;
+		Vector2 position = report.Position;
 		if (lastCursorPosition != Vector2.Zero)
 		{
 			InputManager.SetAccumulatedOffset(InputManager.Resync(lastCursorPosition - position, accumulatedOffset, 0.5f));
 		}
-		Vector2 vector = RoundVec(InputManager.GetAccumulatedOffset());
-		((IAbsolutePositionReport)val).Position = ((IAbsolutePositionReport)val).Position + vector;
-		Emit?.Invoke((IDeviceReport)(object)val);
+		report.Position = position + RoundVec(InputManager.GetAccumulatedOffset());
+	}
+
+	private void LogThrottled(Exception ex)
+	{
+		long now = Environment.TickCount64;
+		if (now - _lastErrorLogMs < ErrorLogIntervalMs)
+		{
+			return;
+		}
+		_lastErrorLogMs = now;
+		Log.Write("Aim Assist", "Error: " + ex.Message, LogLevel.Error);
 	}
 }
