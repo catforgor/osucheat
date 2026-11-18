@@ -3,7 +3,7 @@ using System.Numerics;
 
 namespace AimAssistPlugin.Sdk.Input;
 
-internal class InputManager
+internal static class InputManager
 {
 	private static Vector2 lastCursorPos = Vector2.Zero;
 
@@ -35,9 +35,14 @@ internal class InputManager
 		{
 			return offset;
 		}
-		Vector2 vector = displacement * resyncFactor;
-		offset.X = ((offset.X > 0f) ? Math.Max(0f, (vector.X >= 0f) ? (offset.X - vector.X) : (offset.X + vector.X)) : Math.Min(0f, (vector.X <= 0f) ? (offset.X - vector.X) : (offset.X + vector.X)));
-		offset.Y = ((offset.Y > 0f) ? Math.Max(0f, (vector.Y >= 0f) ? (offset.Y - vector.Y) : (offset.Y + vector.Y)) : Math.Min(0f, (vector.Y <= 0f) ? (offset.Y - vector.Y) : (offset.Y + vector.Y)));
-		return offset;
+		Vector2 movement = displacement * resyncFactor;
+		return new Vector2(ResyncAxis(offset.X, movement.X), ResyncAxis(offset.Y, movement.Y));
+	}
+
+	private static float ResyncAxis(float offset, float movement)
+	{
+		return offset > 0f
+			? Math.Max(0f, offset - MathF.Abs(movement))
+			: Math.Min(0f, offset + MathF.Abs(movement));
 	}
 }

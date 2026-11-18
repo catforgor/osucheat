@@ -39,14 +39,23 @@ public static class TosuService
 
 	private const int FailureLimit = 5;
 
+	private const string DefaultTosuConfig =
+		"DEBUG_LOG=false\r\nENABLE_AUTOUPDATE=false\r\nOPEN_DASHBOARD_ON_STARTUP=false\r\n\r\n" +
+		"SHOW_MP_COMMANDS=false\r\nCALCULATE_PP=false\r\n\r\n" +
+		"ENABLE_KEY_OVERLAY=false\r\nENABLE_INGAME_OVERLAY=false\r\n\r\n" +
+		"POLL_RATE=15\r\nPRECISE_DATA_POLL_RATE=15\r\n\r\n" +
+		"INGAME_OVERLAY_KEYBIND=Control + Shift + Space\r\nINGAME_OVERLAY_MAX_FPS=60\r\n\r\n" +
+		"SERVER_IP=127.0.0.1\r\nSERVER_PORT=24050\r\nALLOWED_IPS=127.0.0.1,localhost,absolute\r\n\r\n" +
+		"STATIC_FOLDER_PATH=./static";
+
 	private const int NoTime = int.MinValue;
 
 	private static readonly HttpClient PollClient = new() { Timeout = TimeSpan.FromSeconds(2) };
 	private static readonly HttpClient DownloadClient = new() { Timeout = TimeSpan.FromMinutes(5) };
 
 	private static readonly SemaphoreSlim StartLock = new(1, 1);
-	private static readonly object LifecycleLock = new();
-	private static readonly string[] GameProcessNames = { "osu!", "osulazer" };
+	private static readonly Lock LifecycleLock = new();
+	private static readonly string[] GameProcessNames = ["osu!", "osulazer"];
 
 	private static volatile bool _isLazer;
 	private static volatile bool _osuRunning;
@@ -306,7 +315,7 @@ public static class TosuService
 			}
 			if (!File.Exists(tosuConfigPath))
 			{
-				await File.WriteAllTextAsync(tosuConfigPath, "DEBUG_LOG=false\r\nENABLE_AUTOUPDATE=false\r\nOPEN_DASHBOARD_ON_STARTUP=false\r\n\r\nSHOW_MP_COMMANDS=false\r\nCALCULATE_PP=false\r\n\r\nENABLE_KEY_OVERLAY=false\r\nENABLE_INGAME_OVERLAY=false\r\n\r\nPOLL_RATE=15\r\nPRECISE_DATA_POLL_RATE=15\r\n\r\nINGAME_OVERLAY_KEYBIND=Control + Shift + Space\r\nINGAME_OVERLAY_MAX_FPS=60\r\n\r\nSERVER_IP=127.0.0.1\r\nSERVER_PORT=24050\r\nALLOWED_IPS=127.0.0.1,localhost,absolute\r\n\r\nSTATIC_FOLDER_PATH=./static");
+				await File.WriteAllTextAsync(tosuConfigPath, DefaultTosuConfig);
 			}
 
 			try
@@ -361,7 +370,7 @@ public static class TosuService
 			string? digest = (string?)asset["digest"];
 			if (string.IsNullOrEmpty(downloadUrl) || digest == null || !digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
 			{
-				Log.Write(LogGroup, "tosu release has digest", LogLevel.Warning);
+				Log.Write(LogGroup, "tosu release has no digest", LogLevel.Warning);
 				return;
 			}
 

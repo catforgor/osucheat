@@ -2,7 +2,7 @@ using AimAssistPlugin.Services;
 
 namespace AimAssistPlugin.Sdk.Audio;
 
-internal class AudioEngine
+internal static class AudioEngine
 {
 	public static int GetTime()
 	{

@@ -10,15 +10,20 @@ using OsuParsers.Decoders;
 
 namespace AimAssistPlugin.Sdk.Player;
 
-internal partial class HitObjectManager
+internal static partial class HitObjectManager
 {
 	private const float PlayfieldHeight = 384f;
 
-	public static List<HitObject> hitObjects = new List<HitObject>();
+	private static List<HitObject> hitObjects = new();
 
 	public static void CacheHitObjects()
 	{
 		hitObjects = GetAndTransformHitObjects();
+	}
+
+	public static void ClearHitObjects()
+	{
+		hitObjects.Clear();
 	}
 
 	public static HitObject GetHitObject(int index)

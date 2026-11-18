@@ -1,0 +1,17 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Target Name="MergeOsuParsers" AfterTargets="Build" Condition="Exists('$(OutDir)OsuParsers.dll')">
+    <ItemGroup>
+      <MergeInput Include="$(OutDir)$(AssemblyName).dll" />
+      <MergeInput Include="$(OutDir)OsuParsers.dll" />
+      <MergeLibDir Include="@(ReferencePath->'%(RootDir)%(Directory)')" />
+    </ItemGroup>
+    <ILRepack
+      InputAssemblies="@(MergeInput)"
+      OutputFile="$(OutDir)$(AssemblyName).dll"
+      TargetKind="Dll"
+      Internalize="true"
+      DebugInfo="true"
+      LibraryPath="$(OutDir);@(MergeLibDir->Distinct())" />
+    <Delete Files="$(OutDir)OsuParsers.dll;$(OutDir)OsuParsers.pdb" />
+  </Target>
+</Project>

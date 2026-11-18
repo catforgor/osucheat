@@ -1,5 +1,6 @@
 using System;
 using System.Numerics;
+using System.Threading;
 using AimAssistPlugin.Sdk.Input;
 using AimAssistPlugin.Sdk.Player;
 using AimAssistPlugin.Services;
@@ -15,7 +16,7 @@ public class AimAssistPlugin : IPositionedPipelineElement<IDeviceReport>, IPipel
 {
 	private const long ErrorLogIntervalMs = 1000;
 
-	private static readonly object _syncLock = new object();
+	private static readonly Lock _syncLock = new();
 
 	private long _lastErrorLogMs = long.MinValue;
 
@@ -89,7 +90,7 @@ public class AimAssistPlugin : IPositionedPipelineElement<IDeviceReport>, IPipel
 
 	private static void ProcessIdleReport(ITabletReport report)
 	{
-		HitObjectManager.hitObjects.Clear();
+		HitObjectManager.ClearHitObjects();
 		Vector2 lastCursorPosition = InputManager.GetLastCursorPosition();
 		Vector2 accumulatedOffset = InputManager.GetAccumulatedOffset();
 		AimAssistService.Reset();
