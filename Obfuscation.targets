@@ -1,0 +1,36 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Target Name="ObfuscateBuild" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <ObfuscatedDir>$(IntermediateOutputPath)obfuscated\</ObfuscatedDir>
+      <ObfuscarConfigFile>$(IntermediateOutputPath)obfuscar.g.xml</ObfuscarConfigFile>
+    </PropertyGroup>
+    <ItemGroup>
+      <ObfSearchDir Include="@(ReferencePath->'%(RootDir)%(Directory)'->Distinct())" />
+      <ObfConfigLine Include="&lt;?xml version=&quot;1.0&quot;?&gt;" />
+      <ObfConfigLine Include="&lt;Obfuscator&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;InPath&quot; value=&quot;$(OutDir.TrimEnd('\'))&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;OutPath&quot; value=&quot;$(ObfuscatedDir.TrimEnd('\'))&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;KeepPublicApi&quot; value=&quot;true&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;HidePrivateApi&quot; value=&quot;true&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;RenameFields&quot; value=&quot;true&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;RenameProperties&quot; value=&quot;true&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;RenameParameters&quot; value=&quot;true&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;RenameEvents&quot; value=&quot;true&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;ReuseNames&quot; value=&quot;true&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;UseUnicodeNames&quot; value=&quot;false&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;HideStrings&quot; value=&quot;false&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;OptimizeMethods&quot; value=&quot;true&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;SuppressIldasm&quot; value=&quot;false&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;RegenerateDebugInfo&quot; value=&quot;false&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Var name=&quot;MarkedOnly&quot; value=&quot;false&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;AssemblySearchPath path=&quot;%(ObfSearchDir.Identity)&quot; /&gt;" />
+      <ObfConfigLine Include="  &lt;Module file=&quot;$(OutDir.TrimEnd('\'))\$(AssemblyName).dll&quot; /&gt;" />
+      <ObfConfigLine Include="&lt;/Obfuscator&gt;" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(ObfuscarConfigFile)" Lines="@(ObfConfigLine)" Overwrite="true" />
+    <RemoveDir Directories="$(ObfuscatedDir)" Condition="Exists('$(ObfuscatedDir)')" />
+    <Exec Command="dotnet tool restore" WorkingDirectory="$(MSBuildProjectDirectory)" />
+    <Exec Command="dotnet tool run obfuscar.console &quot;$(ObfuscarConfigFile)&quot;" WorkingDirectory="$(MSBuildProjectDirectory)" />
+    <Copy SourceFiles="$(ObfuscatedDir)$(AssemblyName).dll" DestinationFiles="$(OutDir)$(AssemblyName).dll" />
+  </Target>
+</Project>

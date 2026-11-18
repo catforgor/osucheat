@@ -1,5 +1,5 @@
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Target Name="MergeOsuParsers" AfterTargets="Build" Condition="Exists('$(OutDir)OsuParsers.dll')">
+  <Target Name="MergeOsuParsers" AfterTargets="Build" BeforeTargets="ObfuscateBuild" Condition="Exists('$(OutDir)OsuParsers.dll')">
     <ItemGroup>
       <MergeInput Include="$(OutDir)$(AssemblyName).dll" />
       <MergeInput Include="$(OutDir)OsuParsers.dll" />

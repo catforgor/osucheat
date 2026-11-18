@@ -27,7 +27,6 @@ internal static class TosuStartup
 			_cts?.Dispose();
 			_cts = new CancellationTokenSource();
 			CancellationToken token = _cts.Token;
-			_ = Task.Run(() => TosuProcessMonitor.RunAsync(token));
 			_ = Task.Run(() => TosuDataPoller.RunAsync(token));
 			_isStarted = true;
 		}

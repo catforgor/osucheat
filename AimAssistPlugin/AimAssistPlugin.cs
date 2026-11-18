@@ -22,9 +22,13 @@ public class AimAssistPlugin : IPositionedPipelineElement<IDeviceReport>, IPipel
 
 	public PipelinePosition Position => (PipelinePosition)2;
 
-	[Property("EMA Weight")]
-	[DefaultPropertyValue(0.5f)]
-	[ToolTip("Default: 0.5\n\nDefines the weight of the latest sample against previous ones [Range: 0.0 - 1.0]\n  Lower == More hardware smoothing removed\n  1 == No effect")]
+	[Property("EMA Weight"), DefaultPropertyValue(0.5f), ToolTip
+    (
+        "Default: 0.5\n\n" +
+        "Defines the weight of the latest sample against previous ones [Range: 0.0 - 1.0]\n" +
+        "  Lower == More hardware smoothing removed\n" +
+        "  1 == No effect"
+    )]
 	public float Power
 	{
 		get

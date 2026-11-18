@@ -13,9 +13,7 @@ internal static class TosuState
 
 	public static volatile bool IsLazer;
 
-	public static volatile bool OsuRunning;
 
-	public static volatile bool TosuRunning;
 
 	public static TosuSnapshot? Snapshot => Volatile.Read(ref _snapshot);
 

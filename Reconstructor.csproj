@@ -20,21 +20,44 @@
     <PluginRepositoryUrl>https://github.com/X9VoiD/VoiDPlugins</PluginRepositoryUrl>
     <PluginWikiUrl>$(PluginRepositoryUrl)/wiki/Reconstructor</PluginWikiUrl>
     <PluginLicense>GPL-3.0-only</PluginLicense>
+    <PluginSha256>7e06b98c6aa1b9d2e8bc897a12a7ce01f07438c63e322abf411c425257a1eec9</PluginSha256>
   </PropertyGroup>
   <Target Name="WritePluginMetadata" AfterTargets="Build">
     <ItemGroup>
       <MetadataLine Include="{" />
       <MetadataLine Include="  &quot;Name&quot;: &quot;$(AssemblyName)&quot;," />
       <MetadataLine Include="  &quot;Owner&quot;: &quot;$(PluginOwner)&quot;," />
+      <MetadataLine Include="  &quot;Creator&quot;: null," />
       <MetadataLine Include="  &quot;Description&quot;: &quot;$(PluginDescription)&quot;," />
       <MetadataLine Include="  &quot;PluginVersion&quot;: &quot;$(PluginVersion)&quot;," />
       <MetadataLine Include="  &quot;SupportedDriverVersion&quot;: &quot;$(PluginSupportedDriverVersion)&quot;," />
+      <MetadataLine Include="  &quot;MaxSupportedDriverVersion&quot;: null," />
       <MetadataLine Include="  &quot;RepositoryUrl&quot;: &quot;$(PluginRepositoryUrl)&quot;," />
+      <MetadataLine Include="  &quot;DownloadUrl&quot;: &quot;$(PluginRepositoryUrl)/releases/download/$(PluginVersion)/$(AssemblyName).zip&quot;," />
+      <MetadataLine Include="  &quot;CompressionFormat&quot;: &quot;zip&quot;," />
+      <MetadataLine Include="  &quot;SHA256&quot;: &quot;$(PluginSha256)&quot;," />
       <MetadataLine Include="  &quot;WikiUrl&quot;: &quot;$(PluginWikiUrl)&quot;," />
+      <MetadataLine Include="  &quot;Installed&quot;: false," />
       <MetadataLine Include="  &quot;LicenseIdentifier&quot;: &quot;$(PluginLicense)&quot;" />
       <MetadataLine Include="}" />
     </ItemGroup>
     <WriteLinesToFile File="$(OutDir)metadata.json" Lines="@(MetadataLine)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
+  <Target Name="CreatePluginArchive" AfterTargets="Build" DependsOnTargets="WritePluginMetadata;ObfuscateBuild">
+    <PropertyGroup>
+      <PluginPackageDir>$(IntermediateOutputPath)plugin-package\</PluginPackageDir>
+      <PluginArchivePath>$(OutDir)$(AssemblyName).zip</PluginArchivePath>
+    </PropertyGroup>
+    <RemoveDir Directories="$(PluginPackageDir)" Condition="Exists('$(PluginPackageDir)')" />
+    <MakeDir Directories="$(PluginPackageDir)" />
+    <ItemGroup>
+      <PluginPackageFile Include="$(OutDir)metadata.json" />
+      <PluginPackageFile Include="$(OutDir)$(AssemblyName).dll" />
+      <PluginPackageFile Include="$(OutDir)VoiD.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PluginPackageFile)" DestinationFolder="$(PluginPackageDir)" />
+    <ZipDirectory SourceDirectory="$(PluginPackageDir)" DestinationFile="$(PluginArchivePath)" Overwrite="true" />
+    <RemoveDir Directories="$(PluginPackageDir)" />
   </Target>
   <ItemGroup>
     <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.48">
@@ -45,4 +68,8 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" ExcludeAssets="runtime" />
     <PackageReference Include="OsuParsers" Version="1.7.2" />
   </ItemGroup>
+    <ItemGroup>
+    <None Include="Dependencies/VoiD.dll" TargetPath="VoiD.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Import Project="Obfuscation.targets" />
 </Project>

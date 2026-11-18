@@ -2,7 +2,6 @@ using System;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace AimAssistPlugin.Tosu;
@@ -16,57 +15,34 @@ internal static class TosuDataPoller
 		int failures = 0;
 		while (!ct.IsCancellationRequested)
 		{
+			TimeSpan delay = TosuSettings.UpdateInterval;
 			try
 			{
-				if (TosuState.OsuRunning && TosuState.TosuRunning)
-				{
-					try
-					{
-						Task<string> stateTask = PollClient.GetStringAsync(TosuSettings.StateUrl, ct);
-						Task<string> preciseTask = PollClient.GetStringAsync(TosuSettings.PreciseUrl, ct);
-						await Task.WhenAll(stateTask, preciseTask);
+				Task<string> stateTask = PollClient.GetStringAsync(TosuSettings.StateUrl, ct);
+				Task<string> preciseTask = PollClient.GetStringAsync(TosuSettings.PreciseUrl, ct);
+				await Task.WhenAll(stateTask, preciseTask);
 
-						TosuSnapshot snapshot = TosuSnapshotParser.Parse(JObject.Parse(await stateTask));
-						int? preciseTime = TosuSnapshotParser.ParsePreciseTime(JObject.Parse(await preciseTask));
+				TosuSnapshot snapshot = TosuSnapshotParser.Parse(JObject.Parse(await stateTask));
+				int? preciseTime = TosuSnapshotParser.ParsePreciseTime(JObject.Parse(await preciseTask));
 
-						TosuState.Publish(snapshot, preciseTime);
-						failures = 0;
-					}
-					catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or FormatException or InvalidCastException or ArgumentException)
-					{
-						if (ct.IsCancellationRequested)
-						{
-							break;
-						}
-						if (++failures >= TosuSettings.FailureLimit)
-						{
-							TosuState.Clear();
-						}
-					}
-				}
-				else
-				{
-					failures = 0;
-					TosuState.Clear();
-				}
-				await Task.Delay(TosuSettings.UpdateInterval, ct);
+				TosuState.Publish(snapshot, preciseTime);
+				failures = 0;
 			}
-			catch (OperationCanceledException) when (ct.IsCancellationRequested)
+			catch (Exception) when (!ct.IsCancellationRequested)
+			{
+				if (++failures >= TosuSettings.FailureLimit)
+				{
+					TosuState.Clear();
+					delay = TosuSettings.RetryDelay;
+				}
+			}
+			try
+			{
+				await Task.Delay(delay, ct);
+			}
+			catch (OperationCanceledException)
 			{
 				break;
-			}
-			catch (Exception ex)
-			{
-				TosuLog.ErrorOnce("tosu poll error", ex);
-				TosuState.Clear();
-				try
-				{
-					await Task.Delay(TosuSettings.MonitorInterval, ct);
-				}
-				catch (OperationCanceledException)
-				{
-					break;
-				}
 			}
 		}
 	}
