@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <AssemblyName>AimAssistPlugin</AssemblyName>
+    <AssemblyName>Reconstructor</AssemblyName>
     <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
     <GenerateDependencyFile>false</GenerateDependencyFile>
     <TargetFramework>net10.0</TargetFramework>
@@ -12,6 +12,30 @@
     <CheckForOverflowUnderflow>False</CheckForOverflowUnderflow>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
+  <PropertyGroup>
+    <PluginVersion>0.4.1</PluginVersion>
+    <PluginOwner>X9VoiD</PluginOwner>
+    <PluginDescription>Mathematically Perfect Anti-Hardware-Smoothing</PluginDescription>
+    <PluginSupportedDriverVersion>0.6.1.0</PluginSupportedDriverVersion>
+    <PluginRepositoryUrl>https://github.com/X9VoiD/VoiDPlugins</PluginRepositoryUrl>
+    <PluginWikiUrl>$(PluginRepositoryUrl)/wiki/Reconstructor</PluginWikiUrl>
+    <PluginLicense>GPL-3.0-only</PluginLicense>
+  </PropertyGroup>
+  <Target Name="WritePluginMetadata" AfterTargets="Build">
+    <ItemGroup>
+      <MetadataLine Include="{" />
+      <MetadataLine Include="  &quot;Name&quot;: &quot;$(AssemblyName)&quot;," />
+      <MetadataLine Include="  &quot;Owner&quot;: &quot;$(PluginOwner)&quot;," />
+      <MetadataLine Include="  &quot;Description&quot;: &quot;$(PluginDescription)&quot;," />
+      <MetadataLine Include="  &quot;PluginVersion&quot;: &quot;$(PluginVersion)&quot;," />
+      <MetadataLine Include="  &quot;SupportedDriverVersion&quot;: &quot;$(PluginSupportedDriverVersion)&quot;," />
+      <MetadataLine Include="  &quot;RepositoryUrl&quot;: &quot;$(PluginRepositoryUrl)&quot;," />
+      <MetadataLine Include="  &quot;WikiUrl&quot;: &quot;$(PluginWikiUrl)&quot;," />
+      <MetadataLine Include="  &quot;LicenseIdentifier&quot;: &quot;$(PluginLicense)&quot;" />
+      <MetadataLine Include="}" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(OutDir)metadata.json" Lines="@(MetadataLine)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
   <ItemGroup>
     <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.48">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
